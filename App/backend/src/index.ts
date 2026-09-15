@@ -208,6 +208,7 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       const failures = await reconcileBundledPlugins({
         plugins: services.plugins,
         releases: bundledCatalog.releases,
+        userUninstalledIds: new Set(appStateStore.repositories.plugins.listUserUninstalledIds()),
         enabledById: Object.fromEntries(
           bundledCatalog.releases.map((release) => [
             release.id,

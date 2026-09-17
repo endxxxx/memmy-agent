@@ -175,6 +175,7 @@ function toConversationMessage(
     createdAt: rawMessage.createdAt,
     workspacePath: target.workspacePath,
     gitRoot: target.gitRoot,
+    ...(typeof rawMessage.ordinal === "number" ? { ordinal: rawMessage.ordinal } : {}),
     rawMeta: Object.freeze({
       ...rawMessage.rawMeta,
       cursorStorageHash: target.storageHash

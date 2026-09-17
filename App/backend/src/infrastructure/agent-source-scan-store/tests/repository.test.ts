@@ -22,6 +22,27 @@ describe("durable scan store", () => {
     store.remove();
   });
 
+  it("preserves adapter source order when timestamps were rebuilt out of order", () => {
+    directory = mkdtempSync(join(tmpdir(), "memmy-scan-store-"));
+    const store = openAppAgentSourceScanStore(join(directory, "job.sqlite"), { jobId: "job", sourceId: "cursor", mode: "full", phase: "stage", createdAt: "2026-01-01", updatedAt: "2026-01-01" });
+    const base = { sourceId: "cursor", conversationId: "conversation", workspacePath: null, gitRoot: null, rawMeta: {} };
+    store.stageBatch([
+      { ...base, messageId: "user", role: "user", content: "question", createdAt: "2026-01-01T00:01:00Z", ordinal: 0 },
+      { ...base, messageId: "assistant", role: "assistant", content: "answer", createdAt: "2026-01-01T00:00:00Z", ordinal: 1 }
+    ]);
+
+    const first = [...store.messages("cursor", undefined, 1)][0]!;
+    const second = [...store.messages("cursor", {
+      conversationId: first.conversationId,
+      createdAt: first.createdAt,
+      messageId: first.messageId,
+      ordinal: first.ordinal ?? 0
+    }, 1)][0]!;
+
+    expect([first.messageId, second.messageId]).toEqual(["user", "assistant"]);
+    store.remove();
+  });
+
   it("selects global recent turns and keeps an absent source fallback", () => {
     directory = mkdtempSync(join(tmpdir(), "memmy-scan-store-"));
     const store = openAppAgentSourceScanStore(join(directory, "job.sqlite"), { jobId: "job", sourceId: "all", mode: "initial_subset", phase: "prepare", createdAt: "2026-01-01", updatedAt: "2026-01-01" });

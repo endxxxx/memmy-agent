@@ -126,6 +126,13 @@ describe("cursor source adapter", () => {
         content: "I can help with the Cursor global storage format."
       })
     ]);
+    expect(messages.map((message) => message.ordinal)).toEqual([0, 1]);
+
+    const streamed = await collect(adapter.scan({ fullHistory: true }));
+    expect(streamed.map((message) => message.messageId)).toEqual([
+      "bubble-user-1",
+      "bubble-assistant-1"
+    ]);
   });
 });
 
@@ -193,7 +200,9 @@ function createCursorGlobalStateFixture(): {
       bubbleId: "bubble-user-1",
       type: 1,
       text: "Please remember OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCD",
-      createdAt: "2026-06-01T09:04:35.523Z"
+      // Cursor may recreate a user bubble after its reply. Header order, not
+      // this materialization timestamp, defines the conversation sequence.
+      createdAt: "2026-06-01T09:05:35.523Z"
     });
     insertCursorBubble(db, {
       composerId: "composer-1",
@@ -209,6 +218,40 @@ function createCursorGlobalStateFixture(): {
       text: "I can help with the Cursor global storage format.",
       createdAt: "2026-06-01T09:04:57.329Z"
     });
+    insertCursorBubble(db, {
+      composerId: "composer-1",
+      bubbleId: "bubble-notification",
+      type: 1,
+      text: "<timestamp>Wednesday, Sep 16, 2026, 8:15 PM (UTC+8)</timestamp>\n<system_notification>Task finished.</system_notification>",
+      createdAt: "2026-06-01T09:06:00.000Z"
+    });
+    insertCursorBubble(db, {
+      composerId: "composer-1",
+      bubbleId: "bubble-notification-reply",
+      type: 2,
+      text: "The background task completed.",
+      createdAt: "2026-06-01T09:06:01.000Z"
+    });
+    insertCursorBubble(db, {
+      composerId: "composer-1",
+      bubbleId: "bubble-orphan",
+      type: 1,
+      text: "<timestamp>orphaned stale branch</timestamp>",
+      createdAt: "2026-06-01T09:03:00.000Z"
+    });
+    db.prepare("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)").run(
+      "composerData:composer-1",
+      JSON.stringify({
+        _v: 18,
+        composerId: "composer-1",
+        fullConversationHeadersOnly: [
+          { bubbleId: "bubble-user-1", type: 1 },
+          { bubbleId: "bubble-assistant-1", type: 2 },
+          { bubbleId: "bubble-notification", type: 1 },
+          { bubbleId: "bubble-notification-reply", type: 2 }
+        ]
+      })
+    );
   } finally {
     db.close();
   }

@@ -65,6 +65,7 @@ export function openAppAgentSourceScanStore(path: string, job: AppScanJobMeta): 
       git_root TEXT,
       raw_meta_json TEXT NOT NULL,
       ordinal INTEGER NOT NULL,
+      source_ordinal INTEGER,
       PRIMARY KEY (job_id, source_id, message_id)
     );
     CREATE TABLE IF NOT EXISTS scan_source_state (
@@ -82,7 +83,9 @@ export function openAppAgentSourceScanStore(path: string, job: AppScanJobMeta): 
   `);
   // Older stores created before the job_id column are upgraded in place.
   try { db.exec("ALTER TABLE staged_messages ADD COLUMN job_id TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+  try { db.exec("ALTER TABLE staged_messages ADD COLUMN source_ordinal INTEGER"); } catch { /* already present */ }
   db.exec("CREATE INDEX IF NOT EXISTS staged_order ON staged_messages(job_id, source_id, conversation_id, created_at, message_id, ordinal)");
+  db.exec("CREATE INDEX IF NOT EXISTS staged_source_order ON staged_messages(job_id, source_id, conversation_id, source_ordinal, created_at, message_id, ordinal)");
   db.exec("CREATE TABLE IF NOT EXISTS scan_cursors (source_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, created_at TEXT NOT NULL, message_id TEXT NOT NULL, ordinal INTEGER NOT NULL)");
   db.exec("CREATE TABLE IF NOT EXISTS checkpoints (source_id TEXT NOT NULL, conversation_id TEXT NOT NULL, last_message_id TEXT NOT NULL, last_created_at TEXT NOT NULL, content_hash TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(source_id, conversation_id))");
   db.exec("CREATE TABLE IF NOT EXISTS conversation_meta (source_id TEXT NOT NULL, conversation_id TEXT NOT NULL, last_message_id TEXT NOT NULL, last_created_at TEXT NOT NULL, content_hash TEXT NOT NULL, selected INTEGER NOT NULL, PRIMARY KEY(source_id, conversation_id))");
@@ -95,13 +98,16 @@ export function openAppAgentSourceScanStore(path: string, job: AppScanJobMeta): 
     db.prepare("INSERT INTO scan_meta(id,job_id,source_id,mode,phase,created_at,updated_at,error) VALUES(1,?,?,?,?,?,?,?)").run(job.jobId, job.sourceId, job.mode, job.phase, job.createdAt, job.updatedAt, job.error ?? null);
   }
   let ordinal = Number((db.prepare("SELECT COALESCE(MAX(ordinal), -1) AS value FROM staged_messages WHERE job_id=?").get(job.jobId) as { value: number }).value) + 1;
-  const insert = db.prepare("INSERT OR IGNORE INTO staged_messages(job_id,source_id,conversation_id,message_id,role,content,created_at,workspace_path,git_root,raw_meta_json,ordinal) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+  const insert = db.prepare("INSERT OR IGNORE INTO staged_messages(job_id,source_id,conversation_id,message_id,role,content,created_at,workspace_path,git_root,raw_meta_json,ordinal,source_ordinal) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
   const store: AppAgentSourceScanStore = {
     path,
     stage(message) {
       const bytes = Buffer.byteLength(JSON.stringify(message));
       if (bytes > MAX_RECORD_BYTES) throw new Error(`scan record exceeds 64 MiB limit (${bytes} bytes)`);
-      const result = insert.run(job.jobId, message.sourceId, message.conversationId, message.messageId, message.role, message.content, message.createdAt, message.workspacePath, message.gitRoot, JSON.stringify(message.rawMeta), ordinal++);
+      const sourceOrdinal = typeof message.ordinal === "number" && Number.isSafeInteger(message.ordinal)
+        ? message.ordinal
+        : null;
+      const result = insert.run(job.jobId, message.sourceId, message.conversationId, message.messageId, message.role, message.content, message.createdAt, message.workspacePath, message.gitRoot, JSON.stringify(message.rawMeta), ordinal++, sourceOrdinal);
       return Number(result.changes) > 0;
     },
     stageBatch(messages) {
@@ -115,11 +121,19 @@ export function openAppAgentSourceScanStore(path: string, job: AppScanJobMeta): 
       limit = Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.floor(limit))) : 500;
       const parameters: SQLInputValue[] = [job.jobId, sourceId];
       let where = "job_id=? AND source_id=?";
-      if (cursor) {
-        where += " AND ((conversation_id > ?) OR (conversation_id = ? AND (created_at > ? OR (created_at = ? AND (message_id > ? OR (message_id = ? AND ordinal > ?))))))";
+      const cursorRow = cursor
+        ? db.prepare("SELECT source_ordinal AS sourceOrdinal FROM staged_messages WHERE job_id=? AND source_id=? AND message_id=?")
+            .get(job.jobId, sourceId, cursor.messageId) as { sourceOrdinal: number | null } | undefined
+        : undefined;
+      const cursorUsesSourceOrder = cursorRow?.sourceOrdinal !== null && cursorRow?.sourceOrdinal !== undefined;
+      if (cursor && cursorUsesSourceOrder) {
+        where += " AND ((conversation_id > ?) OR (conversation_id = ? AND (source_ordinal IS NULL OR (source_ordinal > ? OR (source_ordinal = ? AND (created_at > ? OR (created_at = ? AND message_id > ?)))))))";
+        parameters.push(cursor.conversationId, cursor.conversationId, cursor.ordinal, cursor.ordinal, cursor.createdAt, cursor.createdAt, cursor.messageId);
+      } else if (cursor) {
+        where += " AND ((conversation_id > ?) OR (conversation_id = ? AND source_ordinal IS NULL AND (created_at > ? OR (created_at = ? AND (message_id > ? OR (message_id = ? AND ordinal > ?))))))";
         parameters.push(cursor.conversationId, cursor.conversationId, cursor.createdAt, cursor.createdAt, cursor.messageId, cursor.messageId, cursor.ordinal);
       }
-      const iterator = db.prepare(`SELECT source_id AS sourceId, conversation_id AS conversationId, message_id AS messageId, role, content, created_at AS createdAt, workspace_path AS workspacePath, git_root AS gitRoot, raw_meta_json AS rawMetaJson, ordinal FROM staged_messages WHERE ${where} ORDER BY conversation_id, created_at, message_id, ordinal LIMIT ?`).iterate(...parameters, limit) as Iterable<Record<string, unknown>>;
+      const iterator = db.prepare(`SELECT source_id AS sourceId, conversation_id AS conversationId, message_id AS messageId, role, content, created_at AS createdAt, workspace_path AS workspacePath, git_root AS gitRoot, raw_meta_json AS rawMetaJson, COALESCE(source_ordinal, ordinal) AS ordinal FROM staged_messages WHERE ${where} ORDER BY conversation_id, (source_ordinal IS NULL), source_ordinal, created_at, message_id, ordinal LIMIT ?`).iterate(...parameters, limit) as Iterable<Record<string, unknown>>;
       return (function*() {
         let bytes = 0;
         let count = 0;

@@ -684,16 +684,17 @@ async function stageStandaloneSource(
       if (batch.length > 0 && (batch.length >= 500 || batchBytes + bytes > 8 * 1024 * 1024)) {
         staged += store.stageBatch(batch);
         const last = batch[batch.length - 1]!;
-        store.saveScanCursor(sourceId, { conversationId: last.conversationId, createdAt: last.createdAt, messageId: last.messageId, ordinal: last.ordinal ?? 0 });
+        store.saveScanCursor(sourceId, { conversationId: last.conversationId, createdAt: last.createdAt, messageId: last.messageId, ordinal: last.ordinal ?? emittedOrdinal - 1 });
         batch.length = 0;
         batchBytes = 0;
       }
-      batch.push({ ...normalizedMessage, ordinal: emittedOrdinal++ });
+      batch.push(normalizedMessage);
+      emittedOrdinal += 1;
       batchBytes += bytes;
       if (batch.length >= 500 || batchBytes >= 8 * 1024 * 1024) {
         staged += store.stageBatch(batch);
         const last = batch[batch.length - 1]!;
-        store.saveScanCursor(sourceId, { conversationId: last.conversationId, createdAt: last.createdAt, messageId: last.messageId, ordinal: last.ordinal ?? 0 });
+        store.saveScanCursor(sourceId, { conversationId: last.conversationId, createdAt: last.createdAt, messageId: last.messageId, ordinal: last.ordinal ?? emittedOrdinal - 1 });
         batch.length = 0;
         batchBytes = 0;
       }
@@ -701,7 +702,7 @@ async function stageStandaloneSource(
     if (batch.length > 0) {
       staged += store.stageBatch(batch);
       const last = batch[batch.length - 1]!;
-      store.saveScanCursor(sourceId, { conversationId: last.conversationId, createdAt: last.createdAt, messageId: last.messageId, ordinal: last.ordinal ?? 0 });
+      store.saveScanCursor(sourceId, { conversationId: last.conversationId, createdAt: last.createdAt, messageId: last.messageId, ordinal: last.ordinal ?? emittedOrdinal - 1 });
     }
   } catch (error) {
     if (signal.aborted) throw error;

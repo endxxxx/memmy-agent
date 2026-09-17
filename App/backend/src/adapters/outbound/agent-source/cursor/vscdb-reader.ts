@@ -13,6 +13,7 @@ export interface RawCursorMessage {
   content: string;
   createdAt: string;
   rawMeta: Readonly<Record<string, unknown>>;
+  ordinal?: number;
 }
 
 interface ItemTableRow {
@@ -46,6 +47,18 @@ interface RawBubbleLike {
   text?: unknown;
   createdAt?: unknown;
   timestamp?: unknown;
+  conversationTurnIndex?: unknown;
+}
+
+interface RawComposerHeaderLike {
+  bubbleId?: unknown;
+  type?: unknown;
+  createdAt?: unknown;
+}
+
+interface CanonicalComposer {
+  conversationId: string;
+  headers: readonly RawComposerHeaderLike[];
 }
 
 /** Vscdb reader module. */
@@ -77,15 +90,7 @@ export async function* streamCursorVscdb(path: string): AsyncIterable<RawCursorM
       }
     }
     if (hasTable(db, "cursorDiskKV")) {
-      const statement = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND value IS NOT NULL ORDER BY key ASC");
-      let rows = 0;
-      for (const row of statement.iterate() as Iterable<CursorDiskKvRow>) {
-        rows += 1;
-        if (rows % SQLITE_ROW_YIELD_INTERVAL === 0) await yieldToEventLoop();
-        if (Buffer.byteLength(row.value) > MAX_RECORD_BYTES) continue;
-        const message = extractMessageFromBubbleRow(row);
-        if (message) yield message;
-      }
+      for await (const message of streamCursorDiskKvMessages(db)) yield message;
     }
   } finally {
     db.close();
@@ -119,25 +124,91 @@ async function readCursorDiskKvMessages(db: DatabaseSync): Promise<RawCursorMess
     return [];
   }
 
-  const statement = db.prepare(
-    "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND value IS NOT NULL ORDER BY key ASC"
-  );
   const messages: RawCursorMessage[] = [];
-  let rows = 0;
-  for (const row of statement.iterate() as Iterable<CursorDiskKvRow>) {
-    rows += 1;
-    if (rows % SQLITE_ROW_YIELD_INTERVAL === 0) {
-      await yieldToEventLoop();
-    }
+  for await (const message of streamCursorDiskKvMessages(db)) messages.push(message);
 
-    if (Buffer.byteLength(row.value) > MAX_RECORD_BYTES) continue;
-    const message = extractMessageFromBubbleRow(row);
-    if (message) {
-      messages.push(message);
+  return messages;
+}
+
+/**
+ * Reads modern Cursor conversations through their canonical header arrays.
+ * Unreferenced bubble rows are stale branches/checkpoints and must not be
+ * interpreted as active conversation messages.
+ */
+async function* streamCursorDiskKvMessages(db: DatabaseSync): AsyncIterable<RawCursorMessage> {
+  const composers = await readCanonicalComposers(db);
+  const canonicalConversationIds = new Set(composers.map((composer) => composer.conversationId));
+  const getBubble = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key = ? AND value IS NOT NULL");
+  let rows = 0;
+
+  for (const composer of composers) {
+    let skipSyntheticTurn = false;
+    for (const [index, header] of composer.headers.entries()) {
+      const bubbleId = getString(header.bubbleId);
+      if (!bubbleId) continue;
+      rows += 1;
+      if (rows % SQLITE_ROW_YIELD_INTERVAL === 0) await yieldToEventLoop();
+      const row = getBubble.get(`bubbleId:${composer.conversationId}:${bubbleId}`) as CursorDiskKvRow | undefined;
+      const beginsUserTurn = normalizeBubbleRole(header.type) === "user";
+      if (!row || Buffer.byteLength(row.value) > MAX_RECORD_BYTES) {
+        if (beginsUserTurn) skipSyntheticTurn = true;
+        continue;
+      }
+      const message = extractMessageFromBubbleRow(row, {
+        ordinal: index,
+        headerType: header.type,
+        headerCreatedAt: header.createdAt
+      });
+      if (!message) {
+        if (beginsUserTurn) skipSyntheticTurn = true;
+        continue;
+      }
+      if (message.role === "user") {
+        skipSyntheticTurn = isSyntheticNotification(message.content);
+        if (skipSyntheticTurn) continue;
+      } else if (skipSyntheticTurn) {
+        continue;
+      }
+      yield message;
     }
   }
 
-  return messages;
+  // Older/partial databases may have bubble rows but no composerData headers.
+  // Preserve that compatibility only for conversations without canonical data.
+  const statement = db.prepare(
+    "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND value IS NOT NULL ORDER BY key ASC"
+  );
+  for (const row of statement.iterate() as Iterable<CursorDiskKvRow>) {
+    rows += 1;
+    if (rows % SQLITE_ROW_YIELD_INTERVAL === 0) await yieldToEventLoop();
+    if (Buffer.byteLength(row.value) > MAX_RECORD_BYTES) continue;
+    const key = parseBubbleKey(row.key);
+    if (!key || canonicalConversationIds.has(key.conversationId)) continue;
+    const message = extractMessageFromBubbleRow(row);
+    if (message) yield message;
+  }
+}
+
+async function readCanonicalComposers(db: DatabaseSync): Promise<CanonicalComposer[]> {
+  const statement = db.prepare(
+    "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND value IS NOT NULL ORDER BY key ASC"
+  );
+  const composers: CanonicalComposer[] = [];
+  let rows = 0;
+  for (const row of statement.iterate() as Iterable<CursorDiskKvRow>) {
+    rows += 1;
+    if (rows % SQLITE_ROW_YIELD_INTERVAL === 0) await yieldToEventLoop();
+    if (Buffer.byteLength(row.value) > MAX_RECORD_BYTES) continue;
+    const parsed = parseJson(row.value);
+    if (!isRecord(parsed) || !Array.isArray(parsed.fullConversationHeadersOnly)) continue;
+    const conversationId = getString(parsed.composerId) ?? parseComposerKey(row.key);
+    if (!conversationId) continue;
+    composers.push({
+      conversationId,
+      headers: parsed.fullConversationHeadersOnly.filter(isRecord)
+    });
+  }
+  return composers;
 }
 
 /** Handles extract messages from item row. */
@@ -156,7 +227,10 @@ function extractMessagesFromItemRow(row: ItemTableRow): RawCursorMessage[] {
 }
 
 /** Handles extract message from bubble row. */
-function extractMessageFromBubbleRow(row: CursorDiskKvRow): RawCursorMessage | null {
+function extractMessageFromBubbleRow(
+  row: CursorDiskKvRow,
+  canonical?: { ordinal: number; headerType?: unknown; headerCreatedAt?: unknown }
+): RawCursorMessage | null {
   const parsed = parseJson(row.value);
   if (!isRecord(parsed)) {
     return null;
@@ -167,7 +241,7 @@ function extractMessageFromBubbleRow(row: CursorDiskKvRow): RawCursorMessage | n
     return null;
   }
 
-  return toRawCursorBubbleMessage(keyParts.conversationId, row.key, keyParts.bubbleId, parsed);
+  return toRawCursorBubbleMessage(keyParts.conversationId, row.key, keyParts.bubbleId, parsed, canonical);
 }
 
 /** Handles to message container. */
@@ -234,10 +308,11 @@ function toRawCursorBubbleMessage(
   conversationId: string,
   rowKey: string,
   fallbackBubbleId: string,
-  bubble: RawBubbleLike
+  bubble: RawBubbleLike,
+  canonical?: { ordinal: number; headerType?: unknown; headerCreatedAt?: unknown }
 ): RawCursorMessage | null {
   const content = getString(bubble.text);
-  const role = normalizeBubbleRole(bubble.type);
+  const role = normalizeBubbleRole(bubble.type ?? canonical?.headerType);
   if (!content || !role) {
     return null;
   }
@@ -248,11 +323,16 @@ function toRawCursorBubbleMessage(
     conversationId,
     role,
     content,
-    createdAt: normalizeTimestamp(bubble.createdAt ?? bubble.timestamp),
+    createdAt: normalizeTimestamp(bubble.createdAt ?? bubble.timestamp ?? canonical?.headerCreatedAt),
+    ...(canonical ? { ordinal: canonical.ordinal } : {}),
     rawMeta: Object.freeze({
       cursorDiskKvKey: rowKey,
       cursorBubbleId: bubbleId,
-      cursorBubbleType: bubble.type
+      cursorBubbleType: bubble.type ?? canonical?.headerType,
+      ...(canonical ? { cursorConversationIndex: canonical.ordinal } : {}),
+      ...(typeof bubble.conversationTurnIndex === "number"
+        ? { cursorConversationTurnIndex: bubble.conversationTurnIndex }
+        : {})
     })
   };
 }
@@ -350,6 +430,17 @@ function parseBubbleKey(key: string): { conversationId: string; bubbleId: string
   };
 }
 
+function parseComposerKey(key: string): string | null {
+  const prefix = "composerData:";
+  return key.startsWith(prefix) && key.length > prefix.length ? key.slice(prefix.length) : null;
+}
+
+function isSyntheticNotification(content: string): boolean {
+  if (!/<system_notification>[\s\S]*<\/system_notification>/i.test(content)) return false;
+  const userQuery = content.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i)?.[1]?.trim();
+  return !userQuery || /^(briefly\s+)?inform the user\b/i.test(userQuery);
+}
+
 /**
  * Determines whether a SQLite table exists.
  *
@@ -369,8 +460,12 @@ function hasTable(db: DatabaseSync, tableName: string): boolean {
  * @returns The Array.sort comparison result.
  */
 function compareRawCursorMessages(left: RawCursorMessage, right: RawCursorMessage): number {
+  const ordinalOrder = typeof left.ordinal === "number" && typeof right.ordinal === "number"
+    ? left.ordinal - right.ordinal
+    : 0;
   return (
     left.conversationId.localeCompare(right.conversationId) ||
+    ordinalOrder ||
     Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
     left.messageId.localeCompare(right.messageId)
   );

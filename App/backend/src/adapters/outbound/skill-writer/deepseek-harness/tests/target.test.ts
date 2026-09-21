@@ -44,20 +44,26 @@ describe("DeepSeek Harness skill target", () => {
     const packageManifest = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
     expect(packageManifest).toMatchObject({
       name: "@memmy/memmy-memory",
+      version: "0.0.0",
       type: "module",
       exports: {
         ".": "./index.mjs",
         "./client": "./client.js"
       },
-      dsh: { client: { platform: "web" } }
+      dsh: {
+        client: {
+          platform: "web",
+          inject: ["@deepseek-ai/dsh-client-ui-conversation"]
+        }
+      }
     });
-    expect(packageManifest).not.toHaveProperty("version");
+    expect(packageManifest).not.toHaveProperty("peerDependencies");
     expect(readFileSync(skillPath, "utf8")).toContain('memmy-memory search "query text" --source deepseek_harness');
     expect(readFileSync(resumeSkillPath, "utf8")).toContain("--source deepseek_harness");
     expect(patch).toContain("id: user-plugin");
     expect(patch).toContain("# memmy-memory plugin:start");
     expect(patch).not.toContain("plugin:start v=");
-    expect(patch).toContain("name: '@memmy/memmy-memory'");
+    expect(patch).toContain("name: '" + pluginPath + "'");
     expect(patch).toContain(memmyConfigPath);
     expect(YAML.parse(patch)).toHaveLength(2);
     expect(readFileSync(pluginPath, "utf8")).toContain(
@@ -76,6 +82,19 @@ describe("DeepSeek Harness skill target", () => {
       ["# user patch", "- insert:", "    - id: user-plugin", "      name: '@example/user-plugin'", ""].join("\n")
     );
     await expect(target.isInstalled("deepseek_harness")).resolves.toBe(false);
+  });
+
+  it("loads without DeepSeek Harness packages in the plugin directory ancestry", async () => {
+    const rootDirectory = createRoot();
+    const target = createDeepseekHarnessSkillTarget({ rootDirectory });
+    await target.installPlugin?.("deepseek_harness");
+    const pluginPath = join(installedPluginDirectory(rootDirectory), "index.mjs");
+
+    await expect(import(pathToFileURL(pluginPath).href + "?standalone=" + crypto.randomUUID()))
+      .resolves.toMatchObject({
+        name: "memmy-memory",
+        apply: expect.any(Function)
+      });
   });
 
   it("restores an empty patch after uninstall", async () => {
@@ -420,6 +439,15 @@ describe("DeepSeek Harness skill target", () => {
       "memmy_memory_get",
       "memmy_memory_add"
     ]);
+    expect(registeredTools[0]?.parameters).toMatchObject({
+      type: "object",
+      required: ["query"],
+      additionalProperties: false,
+      properties: {
+        query: { type: "string" },
+        layers: { type: "array" }
+      }
+    });
     expect(requests.find((request) => request.path === "/api/v1/sessions/open")?.body).toMatchObject({
       sessionId: "deepseek_harness-memory-dsh-session-1"
     });

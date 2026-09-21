@@ -22,7 +22,6 @@ const TARGET_ID = "deepseek_harness";
 const DISPLAY_NAME = "DeepSeek Harness";
 const PATCH_START = "# memmy-memory plugin:start";
 const PATCH_END = "# memmy-memory plugin:end";
-const PLUGIN_PACKAGE_NAME = "@memmy/memmy-memory";
 
 export interface CreateDeepseekHarnessSkillTargetDeps {
   rootDirectory?: string;
@@ -35,6 +34,7 @@ export function createDeepseekHarnessSkillTarget(
   const rootDirectory = deps.rootDirectory ?? resolveDeepseekHarnessHomeDirectory();
   const memmyConfigPath = deps.memmyConfigPath ?? join(homedir(), ".memmy", "config.yaml");
   const pluginDirectory = join(rootDirectory, "profiles", "node_modules", "@memmy", "memmy-memory");
+  const pluginEntryPath = join(pluginDirectory, "index.mjs");
   const patchPath = join(rootDirectory, "cordis.patch.yml");
 
   return {
@@ -65,7 +65,7 @@ export function createDeepseekHarnessSkillTarget(
       const clientSource = await readTextFile(join(pluginDirectory, "client.js"));
       const packageSource = await readTextFile(join(pluginDirectory, "package.json"));
       const bridgeSource = await readTextFile(join(pluginDirectory, "memmy-workspace-bridge.mjs"));
-      return patch.includes("name: " + yamlString(PLUGIN_PACKAGE_NAME)) &&
+      return patch.includes("name: " + yamlString(pluginEntryPath)) &&
         pluginSource === DEEPSEEK_HARNESS_PLUGIN_INDEX &&
         clientSource === DEEPSEEK_HARNESS_PLUGIN_CLIENT &&
         packageSource === JSON.stringify(createDeepseekHarnessPluginPackageManifest(), null, 2) + "\n" &&
@@ -91,7 +91,7 @@ export function createDeepseekHarnessSkillTarget(
         join(pluginDirectory, "memmy-memory-config.json"),
         JSON.stringify({ memmy_config_path: memmyConfigPath, ...(await readMemmyMemoryServiceConfig(memmyConfigPath)) }, null, 2) + "\n"
       );
-      await upsertPatch(patchPath, renderPluginPatch(memmyConfigPath));
+      await upsertPatch(patchPath, renderPluginPatch(memmyConfigPath, pluginEntryPath));
       await replaceMemmySkillDirectory(rootDirectory, renderMemmyPluginSkillManifest(TARGET_ID));
       await replaceMemmyResumeSkillDirectory(rootDirectory, TARGET_ID);
     },
@@ -106,12 +106,12 @@ export function createDeepseekHarnessSkillTarget(
   };
 }
 
-function renderPluginPatch(memmyConfigPath: string): string {
+function renderPluginPatch(memmyConfigPath: string, pluginEntryPath: string): string {
   return [
     PATCH_START,
     "- insert:",
     "    - id: memmy-memory",
-    "      name: " + yamlString(PLUGIN_PACKAGE_NAME),
+    "      name: " + yamlString(pluginEntryPath),
     "      config:",
     "        memmyConfigPath: " + yamlString(memmyConfigPath),
     PATCH_END

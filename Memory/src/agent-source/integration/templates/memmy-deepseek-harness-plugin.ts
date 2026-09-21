@@ -1,9 +1,7 @@
-export const DEEPSEEK_HARNESS_PLUGIN_INDEX = String.raw`import { createHash } from "node:crypto";
+export const DEEPSEEK_HARNESS_PLUGIN_INDEX = String.raw`import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { defineTool } from "@deepseek-ai/dsh-tools";
 import {
   completeSourceTurn,
   loadRuntimeL3,
@@ -229,6 +227,33 @@ function registerTools(ctx, memmyConfigPath, memorySessionIds, latestQueries) {
       return "Stored Memmy memory " + cleanText(result.id) + ": " + cleanText(result.summary);
     }
   }));
+}
+
+function createUserMessage(input) {
+  return Object.freeze({
+    ...structuredClone(input),
+    id: randomUUID(),
+    role: "user"
+  });
+}
+
+function defineTool(options) {
+  const properties = {};
+  const required = [];
+  for (const [name, spec] of Object.entries(options.parameters || {})) {
+    const { required: isRequired, ...schema } = spec;
+    properties[name] = schema;
+    if (isRequired) required.push(name);
+  }
+  return {
+    ...options,
+    parameters: {
+      type: "object",
+      properties,
+      additionalProperties: false,
+      ...(required.length > 0 ? { required } : {})
+    }
+  };
 }
 
 function textOutput() {
@@ -653,6 +678,7 @@ export const DEEPSEEK_HARNESS_PLUGIN_CLIENT = String.raw`window.__ModuleLoader__
 export function createDeepseekHarnessPluginPackageManifest(): Record<string, unknown> {
   return {
     name: "@memmy/memmy-memory",
+    version: "0.0.0",
     private: true,
     type: "module",
     exports: {
@@ -664,14 +690,9 @@ export function createDeepseekHarnessPluginPackageManifest(): Record<string, unk
       client: {
         platform: "web",
         inject: [
-          "@deepseek-ai/dsh-client-runtime",
           "@deepseek-ai/dsh-client-ui-conversation"
         ]
       }
-    },
-    peerDependencies: {
-      "@deepseek-ai/dsh-llm": "*",
-      "@deepseek-ai/dsh-tools": "*"
     }
   };
 }

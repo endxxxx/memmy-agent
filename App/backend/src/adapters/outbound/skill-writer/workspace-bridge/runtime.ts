@@ -81,14 +81,42 @@ export async function readRuntimeConfig(configUrl: URL, pinnedOwner = false): Pr
   const storage = objectValue(memory.storage);
   const legacyStorage = objectValue(yaml.storage);
   const app = objectValue(yaml.app);
+  const installedUserId = text(snapshot.userId);
+  const credentialUserId = jwtSubject(text(app.cloudUuid));
   return {
     endpoint: text(storage.endpoint) || text(memory.endpoint) || text(legacyStorage.endpoint) || text(snapshot.endpoint) || DEFAULT_ENDPOINT,
     token: text(storage.token) || text(memory.token) || text(legacyStorage.token) || text(snapshot.token),
     userId: pinnedOwner
-      ? text(snapshot.userId) || "local-user"
+      ? recoverRoundedPinnedUserId(installedUserId, credentialUserId) || "local-user"
       : text(app.userId) || text(memory.userId) || text(snapshot.userId) || "local-user",
     workspaceHostId: text(snapshot.workspaceHostId),
   };
+}
+
+function recoverRoundedPinnedUserId(installedUserId: string, credentialUserId: string): string {
+  if (
+    !installedUserId ||
+    !credentialUserId ||
+    installedUserId === credentialUserId ||
+    !/^\d+$/u.test(installedUserId) ||
+    !/^\d+$/u.test(credentialUserId)
+  ) {
+    return installedUserId;
+  }
+  const numericCredential = Number(credentialUserId);
+  return !Number.isSafeInteger(numericCredential) && String(numericCredential) === installedUserId
+    ? credentialUserId
+    : installedUserId;
+}
+
+function jwtSubject(value: string): string {
+  const parts = value.split(".");
+  if (parts.length !== 3 || !parts[1]) return "";
+  try {
+    return text(objectValue(JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"))).sub);
+  } catch {
+    return "";
+  }
 }
 
 export async function openRuntimeSession(input: OpenRuntimeSessionInput): Promise<RuntimeSession | null> {

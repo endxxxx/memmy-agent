@@ -203,7 +203,7 @@ export function createHttpCloudClient(options: CreateHttpCloudClientOptions = {}
         bearerCredential: input.uuid
       });
 
-      return toCloudAccountProfile(data);
+      return toCloudAccountProfile(data, jwtSubject(input.uuid ?? ""));
     },
 
     async updateAccountGuide(input: UpdateAccountGuideInput): Promise<void> {
@@ -536,17 +536,21 @@ function preserveIntegerIdentifiers(raw: string): string {
  * @param data cloud agentLogin data.
  * @returns the account profile without login credentials.
  */
-function toCloudAccountProfile(data: Record<string, unknown>): CloudAccountProfile {
+function toCloudAccountProfile(
+  data: Record<string, unknown>,
+  credentialUserId: string | null = null
+): CloudAccountProfile {
   const email = readString(data.email);
   const phoneNumber = readString(data.phoneNumber) ?? readString(data.phone);
   const nickname = readString(data.userName) ?? (email ? email.split("@")[0] : null) ?? "Memmy User";
+  const userId = readAccountUserId(data.id, credentialUserId);
   const rawProfile = { ...data };
   delete rawProfile.token;
   delete rawProfile.uuid;
   delete rawProfile.invitationResult;
 
   return {
-    userId: readString(data.id) ?? "unknown",
+    userId: userId ?? "unknown",
     email,
     phoneNumber,
     nickname,
@@ -565,7 +569,7 @@ function toCloudLoginResult(data: Record<string, unknown>): CloudLoginResult {
   if (!uuid) {
     throw new Error("Cloud login response missing uuid");
   }
-  const profile = toCloudAccountProfile(data);
+  const profile = toCloudAccountProfile(data, jwtSubject(uuid));
   const invitationResult = InvitationResultSchema.safeParse(data.invitationResult);
   const userType = readString(data.userType);
 
@@ -1147,6 +1151,56 @@ function readString(value: unknown): string | null {
   }
 
   return null;
+}
+
+/**
+ * Reads the opaque account identifier without silently corrupting a 64-bit JSON number.
+ *
+ * Cloud account IDs must be strings. Safe integers remain accepted for legacy fixtures and
+ * old deployments, but an unsafe number has already lost information during JSON parsing and
+ * cannot be repaired by converting it back to text.
+ */
+function readAccountUserId(value: unknown, credentialUserId: string | null): string | null {
+  if (typeof value === "string" && value.trim()) {
+    const userId = value.trim();
+    if (credentialUserId && credentialUserId !== userId) {
+      if (isRoundedUserId(userId, credentialUserId)) return credentialUserId;
+      throw new Error("Cloud account response field id conflicts with the authenticated credential subject");
+    }
+    return userId;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (!Number.isSafeInteger(value)) {
+      if (credentialUserId) return credentialUserId;
+      throw new Error("Cloud account response field id must be a string when it exceeds the JavaScript safe integer range");
+    }
+    const userId = String(value);
+    if (credentialUserId && credentialUserId !== userId) {
+      throw new Error("Cloud account response field id conflicts with the authenticated credential subject");
+    }
+    return userId;
+  }
+  return credentialUserId;
+}
+
+function isRoundedUserId(value: string, exactValue: string): boolean {
+  return /^\d+$/u.test(value) &&
+    /^\d+$/u.test(exactValue) &&
+    !Number.isSafeInteger(Number(exactValue)) &&
+    String(Number(exactValue)) === value;
+}
+
+function jwtSubject(value: string): string | null {
+  const parts = value.split(".");
+  if (parts.length !== 3 || !parts[1]) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const subject = (payload as Record<string, unknown>).sub;
+    return typeof subject === "string" && subject.trim() ? subject.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

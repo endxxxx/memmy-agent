@@ -20,6 +20,12 @@ export async function readMemmyMemoryServiceConfig(configPath: string): Promise<
   const storage = toMutableRecord(memmyMemory.storage);
   const legacyStorage = toMutableRecord(root.storage);
   const app = toMutableRecord(root.app);
+  const credentialUserId = jwtSubject(normalizeString(app.cloudUuid));
+  const appUserId = normalizeUserId(app.userId, "app.userId", credentialUserId);
+  const memoryUserId = normalizeUserId(memmyMemory.userId, "memmyMemory.userId", credentialUserId);
+  if (!credentialUserId && appUserId && memoryUserId && appUserId !== memoryUserId) {
+    throw new Error("Memmy config has conflicting app.userId and memmyMemory.userId values");
+  }
   return {
     endpoint: normalizeString(storage.endpoint) ||
       normalizeString(memmyMemory.endpoint) ||
@@ -28,7 +34,7 @@ export async function readMemmyMemoryServiceConfig(configPath: string): Promise<
     token: normalizeString(storage.token) ||
       normalizeString(memmyMemory.token) ||
       normalizeString(legacyStorage.token),
-    userId: normalizeString(app.userId) || normalizeString(memmyMemory.userId) || "local-user",
+    userId: credentialUserId || appUserId || memoryUserId || "local-user",
     workspaceHostId: deriveWorkspaceHostId(getOrCreateInstallationId())
   };
 }
@@ -51,6 +57,33 @@ function toMutableRecord(value: unknown): Record<string, unknown> {
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeUserId(value: unknown, field: string, credentialUserId: string): string {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value !== "string") {
+    if (
+      credentialUserId &&
+      typeof value === "number" &&
+      !Number.isSafeInteger(value) &&
+      String(value) === String(Number(credentialUserId))
+    ) {
+      return credentialUserId;
+    }
+    throw new Error(`${field} must be a string; numeric account IDs can lose precision`);
+  }
+  return value.trim();
+}
+
+function jwtSubject(value: string): string {
+  const parts = value.split(".");
+  if (parts.length !== 3 || !parts[1]) return "";
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as unknown;
+    return isRecord(payload) && typeof payload.sub === "string" ? payload.sub.trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -102,6 +102,33 @@ describe("cursor skill target", () => {
     }
   });
 
+  it("pins an account id as an exact string and rejects numeric config ids", async () => {
+    const { rootDirectory, memmyConfigPath } = createFixture();
+    const target = createCursorSkillTarget({ rootDirectory, memmyConfigPath });
+    writeFileSync(memmyConfigPath, [
+      "app:",
+      '  userId: "2099683346800345089"',
+      "memmyMemory:",
+      '  userId: "2099683346800345089"',
+      ""
+    ].join("\n"), "utf8");
+
+    await target.installPlugin?.("cursor");
+    const installed = JSON.parse(
+      readFileSync(join(rootDirectory, "hooks", "memmy-memory-config.json"), "utf8")
+    ) as { userId?: unknown };
+    expect(installed.userId).toBe("2099683346800345089");
+
+    writeFileSync(memmyConfigPath, [
+      "app:",
+      "  userId: 2099683346800345089",
+      ""
+    ].join("\n"), "utf8");
+    await expect(target.installPlugin?.("cursor")).rejects.toThrow(
+      "app.userId must be a string; numeric account IDs can lose precision"
+    );
+  });
+
   it("installs a resume Skill and reads the current memmyMemory storage instead of legacy storage", async () => {
     const { rootDirectory, memmyConfigPath } = createFixture();
     let requestBody: Record<string, unknown> | undefined;

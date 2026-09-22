@@ -124,6 +124,71 @@ describe("cloud client", () => {
     expect(login.profile.rawProfile).not.toHaveProperty("uuid");
   });
 
+  it("preserves a raw numeric account id before JSON parsing can round it", async () => {
+    const exactUserId = "2099683346800345089";
+    server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        `{"code":0,"message":"ok","data":{"id":${exactUserId},"email":"unsafe-id@example.com","uuid":"cloud.login.uuid"}}`
+      );
+    });
+    await listen(server);
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Mock cloud server did not bind to a port");
+    }
+    const client = createHttpCloudClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      timeoutMs: 1000
+    });
+
+    await expect(client.login({
+      email: "unsafe-id@example.com",
+      verificationCode: "654321",
+      loginSource: "Memmy"
+    })).resolves.toMatchObject({
+      accountUuid: exactUserId,
+      profile: { userId: exactUserId }
+    });
+  });
+
+  it("recovers an unsafe numeric profile id from the authenticated JWT subject", async () => {
+    const exactUserId = "2099683346800345089";
+    const credential = [
+      Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ sub: exactUserId })).toString("base64url"),
+      "signature"
+    ].join(".");
+    server = createServer((_request, response) => {
+      sendJson(response, {
+        code: 0,
+        message: "ok",
+        data: {
+          id: 2099683346800345089,
+          email: "recovered-id@example.com",
+          uuid: credential
+        }
+      });
+    });
+    await listen(server);
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Mock cloud server did not bind to a port");
+    }
+    const client = createHttpCloudClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      timeoutMs: 1000
+    });
+
+    await expect(client.login({
+      email: "recovered-id@example.com",
+      verificationCode: "654321",
+      loginSource: "Memmy"
+    })).resolves.toMatchObject({
+      profile: { userId: exactUserId }
+    });
+  });
+
   it("keeps authentication requests compatible when no device ID is available", async () => {
     let receivedDeviceId: string | undefined;
     server = createServer((request, response) => {

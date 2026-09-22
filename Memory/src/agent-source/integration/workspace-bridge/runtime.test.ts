@@ -50,6 +50,33 @@ describe("Memory lifecycle runtime", () => {
     });
   });
 
+  it("repairs only a pinned owner that is the numeric rounding of the credential subject", async () => {
+    const fixture = createFixture();
+    const configUrl = pathToFileURL(join(fixture, "memmy-memory-config.json"));
+    const configPath = join(fixture, "config.yaml");
+    const exactUserId = "2099683346800345089";
+    const credential = [
+      Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ sub: exactUserId })).toString("base64url"),
+      "signature"
+    ].join(".");
+    writeFileSync(configUrl, JSON.stringify({
+      memmy_config_path: configPath,
+      userId: "2099683346800345000",
+      workspaceHostId: "a".repeat(64),
+    }));
+    writeFileSync(configPath, [
+      "app:",
+      `  cloudUuid: ${credential}`,
+      `  userId: "${exactUserId}"`,
+      ""
+    ].join("\n"));
+
+    await expect(readRuntimeConfig(configUrl, true)).resolves.toMatchObject({
+      userId: exactUserId
+    });
+  });
+
   it.each([undefined, "pending-session"])("submits the pinned owner with pending Session %s across account changes", async (sessionId) => {
     const fixture = createFixture();
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { BookOpen, Check, FileText, Loader2, LogIn, MessageSquare, MoreHorizontal, Plus, Puzzle, RefreshCw, Scale, Search, X } from "lucide-react";
 import type { InstalledPlugin } from "@memmy/local-api-contracts";
 import { Button } from "../components/button.js";
@@ -6,6 +7,7 @@ import { ConfirmDialog } from "../components/confirm-dialog.js";
 import { Modal } from "../components/modal.js";
 import { Tooltip } from "../components/tooltip.js";
 import { useTranslation } from "../i18n/use-translation.js";
+import { Memmy } from "../components/mascot/memmy.js";
 import { PluginDetailPreview } from "./plugin-detail-preview.js";
 
 export interface MarketplacePlugin {
@@ -28,6 +30,8 @@ export interface PluginMarketplaceSectionProps {
   plugins: MarketplacePlugin[];
   loading?: boolean;
   error?: string | null;
+  actionError?: string | null;
+  actionErrorPluginId?: string | null;
   busyId?: string | null;
   /** Temporarily block lifecycle mutations while keeping refresh available. */
   actionsDisabled?: boolean;
@@ -158,18 +162,18 @@ export function PluginMarketplaceSection(props: PluginMarketplaceSectionProps) {
     // Sign-in and model setup are navigation, not lifecycle mutations, so they stay enabled while actions are disabled.
     const bypassesActionsDisabled = action === "configure" || action === "sign-in";
     return (
-      <Button type="button" size="sm" variant={action === "unavailable" ? "secondary" : "primary"}
+      <button type="button" className="w-full rounded-xl bg-action-sky text-white text-sm font-normal py-2.5 hover:bg-action-sky-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         aria-label={action === "install" ? copy(`安装${plugin.name}`, `Install ${plugin.name}`) : action === "enable" ? copy(`重试安装${plugin.name}`, `Retry installing ${plugin.name}`) : undefined}
         disabled={busy || working || action === "unavailable" || (!bypassesActionsDisabled && actionsDisabled)} onClick={() => performPrimary(plugin)}>
         {working ? <Loader2 size={13} className="mr-1.5 animate-spin" aria-hidden="true" /> : null}
         {working ? copy("处理中…", "Working…") : label}
-      </Button>
+      </button>
     );
   }
 
   const status = (plugin: MarketplacePlugin) => {
     if (props.busyId === plugin.id || isTransitioning(plugin)) return copy("处理中", "Working");
-    if (!plugin.installed) return pluginNeedsSignIn(plugin, signedIn) ? copy("需登录", "Sign in required") : copy("未安装", "Not installed");
+    if (!plugin.installed) return copy("未安装", "Not installed");
     if (plugin.installed.state === "failed") return copy("安装失败", "Installation failed");
     if (plugin.installed.state !== "active") return copy("安装未完成", "Installation incomplete");
     if (pluginNeedsSignIn(plugin, signedIn)) return copy("已安装 · 需登录", "Installed · Sign in required");
@@ -181,9 +185,12 @@ export function PluginMarketplaceSection(props: PluginMarketplaceSectionProps) {
   return (
     <section ref={sectionRef} className="memory-panel plugin-marketplace-section" aria-label={copy("任务插件", "Task plugins")}>
       <div className="memory-panel__header">
-        <div className="memory-panel__header-main">
-          <h2 className="memory-panel__title">{copy("任务插件", "Task plugins")}</h2>
-          <p className="memory-panel__subtitle">{copy("由 Memmy 提供和维护，围绕具体目标提供完整任务能力。", "Complete entire tasks with capabilities provided and maintained by Memmy.")}</p>
+        <div className="memory-panel__header-main extension-catalog-heading">
+          <Memmy pose="box" size={56} />
+          <div className="extension-catalog-heading-copy">
+            <h2 className="memory-panel__title">{copy("任务插件", "Task plugins")}</h2>
+            <p className="memory-panel__subtitle">{copy("由 Memmy 提供和维护，围绕具体目标提供完整任务能力。", "Complete entire tasks with capabilities provided and maintained by Memmy.")}</p>
+          </div>
         </div>
         <button type="button" disabled={props.loading || busy} onClick={props.onRefresh}
           aria-label={copy("刷新", "Refresh")} title={copy("刷新", "Refresh")}
@@ -211,15 +218,16 @@ export function PluginMarketplaceSection(props: PluginMarketplaceSectionProps) {
       {props.error ? <p role="alert" className="mb-4 rounded-card border border-status-error/20 bg-status-error/5 p-3 text-sm text-status-error">{props.error}</p> : null}
       {props.loading ? <p role="status" className="mb-4 text-sm text-text-ink/55">{copy("正在加载插件…", "Loading plugins…")}</p> : null}
       {!props.loading && visiblePlugins.length === 0 ? (
-        <div className="rounded-card border border-border-stone/30 bg-background-paper px-6 py-12 text-center text-sm text-text-ink/50">
-          <Puzzle size={26} className="mx-auto mb-3 text-text-ink/30" aria-hidden="true" />
+        <div className="plugin-marketplace-empty-state" role="status">
+          <Puzzle size={18} aria-hidden="true" />
           {normalizedQuery ? copy("没有找到匹配的任务插件。", "No task plugins match your search.")
             : filter === "installed" ? copy("还没有安装插件，去“全部”看看。", "No plugins installed. Explore the All tab.") : copy("暂无可用插件。", "No plugins available.")}
         </div>
       ) : null}
       <div className="plugin-marketplace-grid">
         {visiblePlugins.map((plugin) => (
-          <article key={plugin.id} aria-label={plugin.name} className="plugin-marketplace-row"
+          <article key={plugin.id} aria-label={plugin.name}
+            className={`plugin-marketplace-row${props.actionErrorPluginId === plugin.id && props.actionError ? " plugin-marketplace-row--error" : ""}`}
             data-installed={plugin.installed?.state === "active" && !pluginNeedsSignIn(plugin, signedIn) ? "true" : undefined}>
             <button type="button" onClick={() => setDetailId(plugin.id)} className="plugin-marketplace-summary" aria-label={`${copy("查看", "View ")}${plugin.name}${copy("详情", " details")}`}>
               <PluginIcon category={plugin.category} />
@@ -234,12 +242,12 @@ export function PluginMarketplaceSection(props: PluginMarketplaceSectionProps) {
               {props.busyId === plugin.id || isTransitioning(plugin) ? (
                 <span className="plugin-marketplace-working" role="status" aria-label={copy(`正在处理${plugin.name}`, `Working on ${plugin.name}`)}><Loader2 size={16} className="animate-spin" aria-hidden="true" /></span>
               ) : pluginNeedsSignIn(plugin, signedIn) ? (
-                <button type="button" className="plugin-marketplace-sign-in-button"
+                <Button type="button" size="sm" variant="secondary"
                   aria-label={copy(`登录后使用${plugin.name}`, `Sign in to use ${plugin.name}`)} title={copy("登录后使用", "Sign in to use")}
                   disabled={busy} onClick={() => performPrimary(plugin)}>
                   <LogIn size={14} aria-hidden="true" />
                   {copy("去登录", "Sign in")}
-                </button>
+                </Button>
               ) : !plugin.installed ? (
                 <button type="button" className={plugin.installable ? "plugin-marketplace-icon-button" : "plugin-marketplace-coming-soon"}
                   aria-label={plugin.installable ? copy(`安装${plugin.name}`, `Install ${plugin.name}`) : copy("即将上线", "Coming soon")}
@@ -261,7 +269,7 @@ export function PluginMarketplaceSection(props: PluginMarketplaceSectionProps) {
                   </Tooltip>
                 </span>
               ) : (
-                <button type="button" className="plugin-marketplace-retry" aria-label={copy(`重试安装${plugin.name}`, `Retry installing ${plugin.name}`)} disabled={actionsDisabled} onClick={() => performPrimary(plugin)}>{copy("重试安装", "Retry installation")}</button>
+                <Button type="button" size="sm" variant="secondary" aria-label={copy(`重试安装${plugin.name}`, `Retry installing ${plugin.name}`)} disabled={actionsDisabled} onClick={() => performPrimary(plugin)}>{copy("重试安装", "Retry installation")}</Button>
               )}
               {plugin.installed ? (
                 <div className="plugin-marketplace-menu-anchor" data-plugin-menu>
@@ -287,39 +295,37 @@ export function PluginMarketplaceSection(props: PluginMarketplaceSectionProps) {
                 </div>
               ) : null}
             </div>
+            {props.actionErrorPluginId === plugin.id && props.actionError ? (
+              <p role="alert" className="plugin-marketplace-row-error">{props.actionError}</p>
+            ) : null}
           </article>
         ))}
       </div>
 
-      {detail ? (
+      {detail ? createPortal(
         <Modal open title={detail.name} subtitle={copy("Memmy 官方插件", "An official Memmy plugin")} headerIcon={<PluginIcon category={detail.category} />}
           className="plugin-marketplace-detail"
           backdropClassName="plugin-marketplace-detail-backdrop"
           closeLabel={copy("关闭", "Close")} closeContent={<X size={16} aria-hidden="true" />} onClose={() => setDetailId(null)}
-          style={{ width: 660, maxWidth: "calc(100vw - 32px)" }}
           footer={<div className="plugin-marketplace-detail-footer">
             <span className="plugin-marketplace-detail-status">{status(detail)}{detail.version || detail.installed?.version ? ` · v${detail.version ?? detail.installed?.version}` : ""}</span>
             <div className="plugin-marketplace-detail-actions">
-              {detail.installed ? <Button type="button" size="sm" variant="ghost" disabled={actionsDisabled} onClick={() => requestUninstall(detail)}>{copy("卸载", "Uninstall")}</Button> : null}
+              {detail.installed ? <button type="button" className="w-full rounded-xl border border-stone-200 bg-white text-stone-700 text-sm font-normal py-2.5 hover:bg-stone-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed" disabled={actionsDisabled} onClick={() => requestUninstall(detail)}>{copy("卸载", "Uninstall")}</button> : null}
               {renderPrimary(detail) ?? (detail.installed?.state === "active"
-                ? <Button type="button" size="sm" onClick={() => addToChat(detail)}>{copy("加入对话", "Add to chat")}</Button>
+                ? <button type="button" className="w-full rounded-xl bg-action-sky text-white text-sm font-normal py-2.5 hover:bg-action-sky-hover transition-colors" onClick={() => addToChat(detail)}>{copy("加入对话", "Add to chat")}</button>
                 : null)}
             </div>
           </div>}>
           <div className="plugin-marketplace-detail-content">
             <PluginDetailPreview category={detail.category} name={detail.name} />
-            <p className="plugin-marketplace-detail-description">{capabilityDescription(detail.category, zh)}</p>
-            {(detail.requiresOfficialModel || detail.category === "legal") ? (
-              <div className="plugin-marketplace-detail-conditions" aria-label={copy("使用条件", "Requirements")}>
-                {detail.requiresOfficialModel ? <span>{copy("需登录；推荐 Memmy 官方模型", "Sign-in required; Memmy official model recommended")}</span> : null}
-                {detail.category === "legal" ? <span>{copy("仅限已开通的账号", "For accounts with access")}</span> : null}
-              </div>
-            ) : null}
-            {detail.requiresOfficialModel ? <p className="plugin-marketplace-detail-note">{copy("该插件推荐使用 Memmy 官方模型，效果更好；你也可以使用自己的模型（效果可能不佳），可随时自由切换。", "This plugin works best with the Memmy official model. You can also use your own model (results may be weaker) and switch freely at any time.")}</p> : null}
+            <p className="plugin-marketplace-detail-description">
+              {capabilityDescription(detail.category, zh)}{detail.requiresOfficialModel ? ` ${copy("该插件推荐使用 Memmy 官方模型。", "Memmy official models are recommended for this plugin.")}` : ""}
+            </p>
             {!detail.installed && !detail.installable ? <p className="plugin-marketplace-detail-note">{copy("当前尚未提供可安装版本。", "An installable release is not available yet.")}</p> : null}
             {detail.installed?.state === "failed" ? <p className="plugin-marketplace-detail-error">{copy("安装未能完成，请重试安装。如果仍然失败，请稍后重试或联系支持。", "Installation could not complete. Retry installation, or contact support if the problem continues.")}</p> : null}
           </div>
-        </Modal>
+        </Modal>,
+        document.body
       ) : null}
 
       <ConfirmDialog open={Boolean(uninstallId && confirmationValid)}

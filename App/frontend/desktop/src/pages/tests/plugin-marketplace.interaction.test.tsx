@@ -73,16 +73,27 @@ describe("live marketplace controller", () => {
     return container.querySelector('article[aria-label="文献综述"] [aria-label="将文献综述加入对话"]');
   }
 
+  it("makes the catalog usable while the model configuration request is still pending", async () => {
+    let resolveModel!: (value: Awaited<ReturnType<typeof clients.config.getModelConfig>>) => void;
+    clients.config.getModelConfig.mockImplementationOnce(() => new Promise((resolve) => { resolveModel = resolve; }));
+    await render();
+    expect(clients.plugins.list).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("正在加载插件");
+    expect(button("安装文献综述").disabled).toBe(false);
+    await act(async () => resolveModel({ catalog: { effectiveCandidates: { account: [] } } }));
+    expect(button("安装文献综述").disabled).toBe(false);
+  });
+
   it.each(["list", "details"])("installs and activates an official plugin with one click from %s", async (source) => {
     const hostPermissions: PluginPermission[] = [{ type: "network", hosts: ["arxiv.org", "api.crossref.org"] }];
     const hostPlugin = { ...pending, manifest: { ...pending.manifest, permissions: hostPermissions } };
     clients.plugins.install.mockImplementationOnce(async () => { records = [hostPlugin]; return hostPlugin; });
     await render();
     if (source === "details") await click("查看文献综述详情");
-    await click("安装文献综述", source === "details" ? container.querySelector("[role=dialog]")! : container);
+    await click("安装文献综述", source === "details" ? document.querySelector("[role=dialog]")! : container);
     expect(clients.plugins.install).toHaveBeenCalledExactlyOnceWith("literature-review", "0.5.18");
     expect(container.querySelector(".confirm-dialog")).toBeNull();
-    expect(container.querySelector("[role=dialog]")).toBeNull();
+    expect(document.querySelector("[role=dialog]")).toBeNull();
     expect(clients.plugins.approvePermissions).toHaveBeenCalledExactlyOnceWith("literature-review", hostPermissions);
     expect(clients.plugins.enable).toHaveBeenCalledExactlyOnceWith("literature-review");
     expect(clients.plugins.install.mock.invocationCallOrder[0]).toBeLessThan(clients.plugins.approvePermissions.mock.invocationCallOrder[0]);
@@ -183,7 +194,7 @@ describe("live marketplace controller", () => {
     expect(container.textContent).toContain("无法读取模型配置");
     expect(container.textContent).not.toContain("配置官方模型");
     await click("文献综述更多操作"); await click("卸载");
-    await click("卸载", container.querySelector("[role=dialog]")!);
+    await click("卸载", document.querySelector("[role=dialog]")!);
     expect(clients.plugins.uninstall).toHaveBeenCalledWith("literature-review");
     expect(button("安装文献综述").disabled).toBe(false);
     expect(addToChatButton()).toBeNull();

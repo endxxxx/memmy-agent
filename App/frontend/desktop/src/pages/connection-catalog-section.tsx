@@ -38,7 +38,7 @@ export function ConnectionCatalogSection(props: ConnectionCatalogSectionProps) {
     <section className="memory-panel plugin-marketplace-section" aria-label={title}>
       <div className="memory-panel__header">
         <div className="memory-panel__header-main extension-catalog-heading">
-          <Memmy pose="connect" size={56} />
+          <Memmy pose={channels ? "chat" : "connect"} size={56} />
           <div className="extension-catalog-heading-copy">
             <h2 className="memory-panel__title">{title}</h2>
             <p className="memory-panel__subtitle">{channels

@@ -25,6 +25,7 @@ export function PluginMarketplace() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionErrorPluginId, setActionErrorPluginId] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [officialModelReady, setOfficialModelReady] = useState<boolean | undefined>(undefined);
   const busy = useRef(false);
@@ -35,24 +36,31 @@ export function PluginMarketplace() {
     const current = ++generation.current;
     setLoading(true);
     setActionError(null);
-    const [plugins, model] = await Promise.allSettled([
-      clients.plugins.list(), clients.config.getModelConfig()
-    ]);
-    if (generation.current !== current) return;
-    if (plugins.status === "fulfilled") {
-      setInstalled(plugins.value);
-      setError(null);
-    } else {
-      setError(en ? "Could not load plugins. Please try again." : "插件列表加载失败，请重试。");
-    }
-    setModelError(model.status === "rejected"
-      ? (en ? "Could not read model settings. Refresh to check availability." : "无法读取模型配置，请刷新后查看模型状态。") : null);
-    setOfficialModelReady(model.status === "rejected" ? undefined : Boolean(state.account.userId)
-      && Boolean(model.value.catalog?.effectiveCandidates.account.some((candidate) => (
+    // Model readiness is supplementary; never hold the catalog behind this request.
+    void clients.config.getModelConfig().then((model) => {
+      if (generation.current !== current) return;
+      setModelError(null);
+      setOfficialModelReady(Boolean(state.account.userId)
+      && Boolean(model.catalog?.effectiveCandidates.account.some((candidate) => (
         candidate.source === "account" && candidate.available && candidate.capabilities.includes("agent")
         && candidate.ownerAccountId === state.account.userId
       ))));
-    setLoading(false);
+    }, () => {
+      if (generation.current !== current) return;
+      setOfficialModelReady(undefined);
+      setModelError(en ? "Could not read model settings. Refresh to check availability." : "无法读取模型配置，请刷新后查看模型状态。");
+    });
+    try {
+      const plugins = await clients.plugins.list();
+      if (generation.current !== current) return;
+      setInstalled(plugins);
+      setError(null);
+    } catch {
+      if (generation.current !== current) return;
+      setError(en ? "Could not load plugins. Please try again." : "插件列表加载失败，请重试。");
+    } finally {
+      if (generation.current === current) setLoading(false);
+    }
   }, [clients, en, state.account.userId]);
 
   useEffect(() => {
@@ -65,6 +73,7 @@ export function PluginMarketplace() {
     busy.current = true;
     setBusyId(plugin.id);
     setActionError(null);
+    setActionErrorPluginId(null);
     let failed = false;
     try {
       try { await operation(); } catch { failed = true; }
@@ -74,6 +83,7 @@ export function PluginMarketplace() {
         setActionError(en
           ? `Could not complete the action for ${plugin.name}. Please try again.`
           : `${plugin.name}操作未完成，请重试。`);
+        setActionErrorPluginId(plugin.id);
       }
     } finally {
       setBusyId(null);
@@ -94,7 +104,9 @@ export function PluginMarketplace() {
     <PluginMarketplaceSection
     plugins={plugins}
     loading={loading}
-    error={[error, actionError].filter(Boolean).join(" ") || null}
+    error={error}
+    actionError={actionError}
+    actionErrorPluginId={actionErrorPluginId}
     busyId={busyId}
     actionsDisabled={!clients || Boolean(error)}
     officialModelReady={officialModelReady}

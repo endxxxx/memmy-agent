@@ -1,6 +1,6 @@
 import Foundation
 
-public let openComputerUseVersion = "1.2.4"
+public let openComputerUseVersion = "1.2.5-acceptance.1"
 
 public func resolvedOpenComputerUseVersion(bundle: Bundle = .main) -> String {
     if let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,

@@ -10,14 +10,7 @@ jobs:
   native:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-intel
-            target: darwin-x64
-          - runner: ubuntu-24.04
-            target: linux-x64
-          - runner: ubuntu-24.04-arm
-            target: linux-arm64
+      matrix: ${{ fromJSON(contains(github.event.head_commit.message, '[linux-only]') && '{"include":[{"runner":"ubuntu-24.04","target":"linux-x64"},{"runner":"ubuntu-24.04-arm","target":"linux-arm64"}]}' || '{"include":[{"runner":"macos-15-intel","target":"darwin-x64"},{"runner":"ubuntu-24.04","target":"linux-x64"},{"runner":"ubuntu-24.04-arm","target":"linux-arm64"}]}') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults:
@@ -61,6 +54,9 @@ jobs:
           test "$(node -p 'process.platform + "-" + process.arch')" = "${{ matrix.target }}"
           node plugins/office/scripts/package-runtime.mjs --root "$RUNNER_TEMP/office-runtime-tree" --destination plugins/office/release --target "${{ matrix.target }}" --version 2026.10.30-1 --tools "$RUNNER_TEMP/office-runtime-tree/runtime-tools.json" --set-default
           mv "$RUNNER_TEMP/office-runtime-tree" "$RUNNER_TEMP/office-build-source-hidden"
+      - name: Hide Linux system renderer to verify relocation
+        if: runner.os == 'Linux'
+        run: sudo mv /usr/lib/libreoffice /usr/lib/libreoffice-build-hidden
       - name: Validate cold install, rendering, Agent calls and delivery
         env:
           OFFICE_E2E_MANAGED_RUNTIME: '1'

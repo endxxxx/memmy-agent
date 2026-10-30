@@ -72,7 +72,7 @@ for tool in ['soffice', 'pdfinfo', 'pdftoppm', 'pdftotext']:
         'ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\n'
         'export LD_LIBRARY_PATH="$ROOT/lib:$ROOT/LibreOffice/program"\n'
         'export FONTCONFIG_FILE="$ROOT/etc/fonts.conf"\n'
-        'export SAL_USE_VCLPLUGIN=gen\n'
+        'export SAL_USE_VCLPLUGIN=svp\n'
         f'exec "$ROOT/{command}" "$@"\n')
     wrapper.chmod(0o755)
     tools[tool] = 'bin/' + tool

@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   native:
     strategy:
@@ -25,9 +26,11 @@ jobs:
           node-version: 24
       - name: Provision macOS inputs
         if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          node plugins/office/scripts/provision-macos.mjs
-          brew install poppler
+          gh run download 41029802068 --repo endxxxx/memmy-agent --name office-runtime-darwin-x64 --dir "$RUNNER_TEMP/previous-macos-runtime"
+          python3 plugins/office/scripts/extract-runtime.py "$RUNNER_TEMP/previous-macos-runtime" "$RUNNER_TEMP/office-runtime-tree" darwin-x64
       - name: Provision Linux inputs
         if: runner.os == 'Linux'
         run: |
@@ -45,7 +48,7 @@ jobs:
           npm run build -w @memmy/migrations
       - name: Prepare macOS runtime
         if: runner.os == 'macOS'
-        run: node plugins/office/scripts/prepare-runtime.mjs "$RUNNER_TEMP/office-runtime-tree"
+        run: node plugins/office/scripts/prepare-macos-headless.mjs "$RUNNER_TEMP/office-runtime-tree"
       - name: Prepare Linux runtime
         if: runner.os == 'Linux'
         run: python3 plugins/office/scripts/prepare-linux-runtime.py "$RUNNER_TEMP/office-runtime-tree"

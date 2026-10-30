@@ -283,16 +283,19 @@ describe("Office MPP end to end", () => {
     const imported = await call("office_import", { path: uploaded });
     expect(imported.sourceUnchanged).toBe(true); expect(sha(readFileSync(uploaded))).toBe(uploadHash);
     await call("office_inspect", { taskId: imported.taskId, file: "../uploaded.docx" }, "invalid_path");
-    // The Unix system path does not exist on Windows, where ENOENT proves
-    // nothing about sandbox denial. The owned, existing fixture below covers
-    // denied imports on every platform without relying on OS-specific paths.
-    if (process.platform !== "win32") await call("office_import", { path: "/etc/passwd" }, "EPERM");
+    // Linux namespaces omit /etc entirely; macOS Seatbelt reports EPERM.
+    // Assert host-side existence before accepting namespace invisibility.
+    if (process.platform !== "win32") {
+      expect(existsSync("/etc/passwd")).toBe(true);
+      await call("office_import", { path: "/etc/passwd" }, process.platform === "linux" ? "ENOENT" : "EPERM");
+    }
     const deniedPath = join(root, "outside.docx"); writeFileSync(deniedPath, readFileSync(uploaded));
     expect(existsSync(deniedPath)).toBe(true);
     const deniedHash = sha(readFileSync(deniedPath));
-    // Both OS-level access denial and the plugin's approved-root guard reject
-    // this file; missing-file and unrelated errors must not satisfy the test.
-    await call("office_import", { path: deniedPath }, ["EPERM", "EACCES", "unsafe_file"]);
+    // Namespace-invisible Linux files return ENOENT even though the existing
+    // host fixture above proves that the requested file is real.
+    await call("office_import", { path: deniedPath }, process.platform === "linux"
+      ? ["EPERM", "EACCES", "unsafe_file", "ENOENT"] : ["EPERM", "EACCES", "unsafe_file"]);
     expect(sha(readFileSync(deniedPath))).toBe(deniedHash);
 
     await service.disable("office");

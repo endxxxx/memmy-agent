@@ -136,8 +136,17 @@ node plugins/office/scripts/package-runtime.mjs \
 
 Use the actual build architecture as `--target` (`win32-x64` for Windows x64).
 macOS preparation copies and relocates Homebrew dylibs, then signs the relocated
-Mach-O files. Linux/custom builders may prepare their own self-contained tree and
-four-tool JSON mapping and call `package-runtime.mjs` directly. Symlinks must be
+Mach-O files. `prepare-linux-runtime.py` prepares native Ubuntu 24.04 x64/ARM64
+trees from installed LibreOffice and Poppler build inputs. It includes fonts,
+non-glibc shared libraries and copyright notices, relocates ELF search paths,
+and selects the headless VCL backend. These Linux archives require glibc 2.39+
+and `/bin/sh`; they are not compatible with Alpine/musl or older glibc releases.
+The `office-runtime-release.yml` workflow builds on native Intel macOS and Linux
+runners and verifies managed cold installation and four-format processing.
+Linux validation hides the system LibreOffice tree after packaging to catch
+accidental references to the build installation. Custom builders may prepare
+their own self-contained tree and four-tool JSON mapping and call
+`package-runtime.mjs` directly. Symlinks must be
 dereferenced during preparation. Keep licenses/resources alongside their tools.
 The packer streams large archives and enforces the Host's 1 GiB compressed /
 4 GiB expanded / 50,000-file limits.

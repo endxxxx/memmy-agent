@@ -46,6 +46,11 @@ while queue:
         source = Path(match[1])
         if system.match(source.name):
             continue
+        # UNO libraries locate unorc relative to their own shared object. Keep
+        # them beside LibreOffice's configuration rather than duplicating them
+        # in the generic dependency folder.
+        if (root / 'LibreOffice/program' / source.name).is_file():
+            continue
         target = root / 'lib' / source.name
         if not target.exists():
             shutil.copy2(source, target, follow_symlinks=True)
@@ -57,7 +62,7 @@ for binary in seen:
     # Each module can resolve both its siblings and collected transitive libs.
     lib = os.path.relpath(root / 'lib', binary.parent)
     program = os.path.relpath(root / 'LibreOffice/program', binary.parent)
-    subprocess.run(['patchelf', '--set-rpath', f'$ORIGIN:$ORIGIN/{lib}:$ORIGIN/{program}', str(binary)], check=True)
+    subprocess.run(['patchelf', '--set-rpath', f'$ORIGIN:$ORIGIN/{program}:$ORIGIN/{lib}', str(binary)], check=True)
 
 (root / 'etc/fonts.conf').write_text('''<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -70,7 +75,7 @@ for tool in ['soffice', 'pdfinfo', 'pdftoppm', 'pdftotext']:
     wrapper = root / 'bin' / tool
     wrapper.write_text('#!/bin/sh\n'
         'ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\n'
-        'export LD_LIBRARY_PATH="$ROOT/lib:$ROOT/LibreOffice/program"\n'
+        'export LD_LIBRARY_PATH="$ROOT/LibreOffice/program:$ROOT/lib"\n'
         'export FONTCONFIG_FILE="$ROOT/etc/fonts.conf"\n'
         'export SAL_USE_VCLPLUGIN=svp\n'
         f'exec "$ROOT/{command}" "$@"\n')

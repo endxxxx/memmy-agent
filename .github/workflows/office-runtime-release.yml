@@ -1,5 +1,8 @@
 name: Office runtime release preparation
 on:
+  push:
+    branches: [codex/office-runtime-release-20261030]
+    paths: ['.github/workflows/office-runtime-release.yml', 'plugins/office/scripts/prepare-linux-runtime.py']
   workflow_dispatch:
 permissions:
   contents: read

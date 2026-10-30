@@ -13,6 +13,16 @@ root.mkdir(exist_ok=False)
 for name in ['bin', 'lib', 'libexec', 'etc', 'licenses', 'share/fonts']:
     (root / name).mkdir(parents=True, exist_ok=True)
 shutil.copytree('/usr/lib/libreoffice', root / 'LibreOffice', symlinks=False)
+registry = Path('/etc/libreoffice/registry')
+if registry.is_dir():
+    shutil.copytree(registry, root / 'LibreOffice/share/registry', symlinks=False, dirs_exist_ok=True)
+# Distribution packages intentionally hard-code their system installation and
+# /etc registry. Bootstrap expansion supports ORIGIN-relative portable paths.
+for config in (root / 'LibreOffice/program').glob('*rc'):
+    text = config.read_text()
+    text = text.replace('file:///usr/lib/libreoffice', '${ORIGIN}/..')
+    text = text.replace('file:///etc/libreoffice/registry', '${BRAND_BASE_DIR}/share/registry')
+    config.write_text(text)
 # Debian's LibreOffice tree links resources into /usr/share; dereferencing above
 # retains the actual resources. All subsequently packaged entries are regular files.
 for source in Path('/usr/share/fonts').glob('*'):

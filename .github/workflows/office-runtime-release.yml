@@ -1,0 +1,75 @@
+name: Office runtime release preparation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: ubuntu-24.04
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Provision macOS inputs
+        if: runner.os == 'macOS'
+        run: |
+          node plugins/office/scripts/provision-macos.mjs
+          brew install poppler
+      - name: Provision Linux inputs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils fonts-noto-cjk fonts-dejavu-core fonts-liberation patchelf bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install build dependencies
+        run: |
+          npm ci --prefix plugins/office
+          npm ci
+          npm install --prefix App/memmy-agent --ignore-scripts --no-audit --no-fund
+          npm run build -w @memmy/local-api-contracts
+          npm run build -w @memmy/knowledge
+          npm run build -w @memmy/agent-source-core
+          npm run build -w @memmy/migrations
+      - name: Prepare macOS runtime
+        if: runner.os == 'macOS'
+        run: node plugins/office/scripts/prepare-runtime.mjs "$RUNNER_TEMP/office-runtime-tree"
+      - name: Prepare Linux runtime
+        if: runner.os == 'Linux'
+        run: python3 plugins/office/scripts/prepare-linux-runtime.py "$RUNNER_TEMP/office-runtime-tree"
+      - name: Package immutable runtime
+        run: |
+          test "$(node -p 'process.platform + "-" + process.arch')" = "${{ matrix.target }}"
+          node plugins/office/scripts/package-runtime.mjs --root "$RUNNER_TEMP/office-runtime-tree" --destination plugins/office/release --target "${{ matrix.target }}" --version 2026.10.30-1 --tools "$RUNNER_TEMP/office-runtime-tree/runtime-tools.json" --set-default
+          mv "$RUNNER_TEMP/office-runtime-tree" "$RUNNER_TEMP/office-build-source-hidden"
+      - name: Validate cold install, rendering, Agent calls and delivery
+        env:
+          OFFICE_E2E_MANAGED_RUNTIME: '1'
+          MEMMY_PLUGIN_SANDBOX_TRACE: '1'
+          OFFICE_E2E_QA_DIR: ${{ runner.temp }}/office-qa
+          OFFICE_E2E_REPORT: ${{ runner.temp }}/office-e2e.json
+        run: npm run test:office-plugin:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: office-runtime-${{ matrix.target }}
+          path: |
+            plugins/office/release/office-runtime-*
+            ${{ runner.temp }}/office-e2e.json
+            ${{ runner.temp }}/office-qa/

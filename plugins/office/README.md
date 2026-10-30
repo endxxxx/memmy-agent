@@ -148,6 +148,16 @@ accidental references to the build installation. Custom builders may prepare
 their own self-contained tree and four-tool JSON mapping and call
 `package-runtime.mjs` directly. Symlinks must be
 dereferenced during preparation. Keep licenses/resources alongside their tools.
+
+For macOS releases that initialize `NSSpellChecker` even in headless mode,
+`prepare-macos-headless.mjs <runtime-tree>` builds a dedicated conversion entry
+point from `native/macos-headless.m`. It accepts only `--headless`, suppresses the
+native spellchecker singleton in that process, and calls the vendor's normal
+SAL initialization, `soffice_main`, and SAL teardown. The vendor rendering
+libraries and Host sandbox permissions are unchanged; the launcher source is
+included in the runtime. The original vendor entry executable is retained as
+`soffice-vendor`. Validate this runtime through the actual Host sandbox before
+publishing, rather than treating an unsandboxed invocation as sufficient.
 The packer streams large archives and enforces the Host's 1 GiB compressed /
 4 GiB expanded / 50,000-file limits.
 
